@@ -1,0 +1,169 @@
+Activity 2 — Training Models: Student Dropout Classification
+
+Goal: build and evaluate supervised models that predict dropout (1/0) and produce capacity-aware risk scores for early interventions.
+Primary models: Logistic Regression and Decision Tree, trained with an identical preprocessing pipeline.
+
+🚀 Quick start
+Option A — Google Colab (recommended)
+
+Open Colab ➜ File → Upload notebook ➜ select Activity2_Training_Models.ipynb.
+
+(Optional) Upload data/student_dropout.csv to Colab’s working directory.
+
+Run all cells. The notebook will:
+
+Generate synthetic data (1,000 rows) if no CSV is found.
+
+Run EDA & correlations, preprocessing, train/test split, 5-fold CV (F1), and evaluate LogReg & DecisionTree.
+
+Print metrics and show Confusion Matrix and ROC curves.
+
+Option B — Local (Python ≥ 3.9)
+pip install -U numpy pandas scikit-learn matplotlib
+jupyter notebook Activity2_Training_Models.ipynb
+
+📊 Datasets
+Synthetic (auto-generated)
+
+Rows: 1,000 • Target prevalence: ~20% dropouts.
+
+Variables: demographics (age, gender, origin), academics (HS GPA, admission score, first-semester GPA), financials (SES, scholarship, loan, aid).
+
+Realism: built-in nulls and outliers (e.g., age 80/100; HS-GPA > 5; admission > 100 or negative).
+
+Label: generated from a logistic data-generating process (lower GPA/scores/SES, rural, no aid, loan stress, older age ↑ risk; scholarship/female ↓ risk).
+
+Attached dataset (student_dropout.csv)
+
+Some public versions use a multiclass Target (e.g., Graduate, Dropout, Enrolled).
+
+We binarize into dropout_bin (1 if Dropout, else 0). Use the robust patch below if your file differs.
+
+Robust binarization patch (paste in the notebook after loading df_att):
+
+def make_dropout_bin(df, target_col="Target", expected_dropout_share=0.32):
+    s = df[target_col]
+
+    # Text labels: mark tokens containing 'drop' as positive
+    if s.dtype == "object" or pd.api.types.is_string_dtype(s):
+        st = s.astype(str).str.strip().str.lower()
+        if st.str.contains("drop", na=False).any():
+            bin_col = (st.str.contains("drop", na=False)).astype(int)
+            return bin_col, {"mapping": "text contains 'drop'", "share": bin_col.mean()}
+
+    # Numeric-coded labels: pick code with sensible prevalence (10–60%)
+    sn = pd.to_numeric(s, errors="coerce")
+    codes = sn.dropna().unique()
+    if len(codes) >= 2:
+        candidates = [(c, (sn == c).mean()) for c in codes]
+        sensible = [(c,p) for c,p in candidates if 0.10 <= p <= 0.60] or [min(candidates, key=lambda t: t[1])]
+        dropout_code = min(sensible, key=lambda t: abs(t[1] - expected_dropout_share))[0]
+        bin_col = (sn == dropout_code).astype(int)
+        return bin_col, {"mapping": f"numeric code == {dropout_code}", "share": bin_col.mean()}
+
+    return pd.Series(0, index=df.index, dtype=int), {"mapping": "fallback", "share": 0.0}
+
+drop_bin, info = make_dropout_bin(df_att, target_col="Target", expected_dropout_share=0.32)
+df_att["dropout_bin"] = drop_bin
+print("Binarization info:", info)
+print("dropout_bin distribution:", df_att["dropout_bin"].value_counts(normalize=True).round(3).to_dict())
+
+target = "dropout_bin"
+if df_att[target].nunique() < 2:
+    raise ValueError("dropout_bin has a single class. Inspect df_att['Target'] and adjust mapping.")
+
+🧰 Methodology
+
+Preprocessing (identical for both models)
+
+Numeric: SimpleImputer(strategy="median") ➜ StandardScaler
+
+Categorical: SimpleImputer(strategy="most_frequent") ➜ OneHotEncoder(handle_unknown="ignore")
+
+Implemented with a single ColumnTransformer to ensure fair comparisons.
+
+Modeling
+
+Logistic Regression (max_iter=1000).
+
+Decision Tree (random_state=42).
+
+Split: stratified 80/20 train/test.
+
+CV: 5-fold on the training set with scoring="f1".
+
+Metrics (test set)
+
+Accuracy, Precision, Recall, F1, ROC-AUC
+
+Plots: Confusion Matrix, ROC Curve
+
+Policy / Thresholding
+
+We don’t stop at default 0.50 thresholds: we choose a capacity-aware threshold that captures ~80% of true dropouts (recall) within counseling capacity, then report the confusion matrix & students flagged at that operating point.
+
+Fairness & Governance
+
+Parity checks across gender, origin, SES (especially at the operating threshold).
+
+Counselor human-in-the-loop with explanations (e.g., SHAP in future iterations).
+
+Minimize PII, restrict access, and keep an audit trail.
+
+✅ Results (current run)
+Synthetic dataset (1,000 rows; ~20% positives)
+Model	Accuracy	Precision	Recall	F1	ROC-AUC
+Decision Tree	0.710	0.295	0.325	0.309	0.586
+Logistic Regression	0.815	0.714	0.125	0.213	0.738
+
+F1 champion: Decision Tree (captures more dropouts today).
+
+Ranking strength: LogReg has higher AUC; with class weights + threshold sweep (≈0.25–0.40) it may trade precision for recall and challenge DT.
+
+5-fold CV (train, F1): LR 0.149 ± 0.028; DT 0.300 ± 0.072.
+
+Attached dataset (4,424 rows)
+
+Initial run revealed all-zero dropout_bin ➜ label mapping fixed (see patch above).
+
+After binarization, re-run the same pipeline and threshold selection.
+
+Typical public versions yield ~30–35% dropouts after binarization.
+
+Update the table above once you run with your attached dataset.
+
+🧭 How to reproduce & customize
+
+Tune Decision Tree: set max_depth, min_samples_split, min_samples_leaf + cross-validate.
+
+Tune Logistic Regression: set class_weight='balanced' and sweep decision thresholds to target recall.
+
+Calibration: use Platt/Isotonic on validation to improve probability quality (helps policy).
+
+Top-K policy: measure Recall@Top-K to align with a fixed number of counselor slots.
+
+📈 Executive report
+
+A consulting-style deck (reports/Activity2_Executive_Report.pptx) summarizes:
+
+Problem framing & metrics
+
+Why supervised (vs unsupervised) for decision thresholds
+
+Model mechanics (LogReg, DT)
+
+Validation & results
+
+Threshold policy & fairness
+
+Deployment plan & pilot ask
+
+🔧 Troubleshooting
+
+All-zeros target / stratification skipped: your Target labels didn’t match the mapping—use the binarization patch above and re-run.
+
+ROC/Confusion plots not visible: ensure all cells ran; Colab sometimes collapses output—expand cell output.
+
+Font warnings on heatmaps: harmless (matplotlib font fallback).
+
+Imbalanced data hurts recall: use class_weight='balanced' (LR) or try deeper trees with regularization; always choose a capacity-aware threshold.
